@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh --version)",
+      "Bash(git --version)",
+      "Bash(git config:*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\FLOW\\Desktop\\Main\\Olearna\\UAT testing\\app\\api\\status"
+    ]
+  }
+}

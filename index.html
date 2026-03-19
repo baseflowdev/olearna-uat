@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Olearna – Payment Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f0f4ff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 16px;
+      color: #1a1a2e;
+    }
+
+    header { text-align: center; margin-bottom: 40px; }
+    header h1 { font-size: 2rem; color: #2d3cc7; }
+    header p  { color: #555; margin-top: 6px; font-size: 0.95rem; }
+
+    .badge {
+      display: inline-block;
+      background: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffc107;
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 0.8rem;
+      margin-top: 10px;
+    }
+
+    .cards {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      justify-content: center;
+      width: 100%;
+      max-width: 800px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 30px;
+      width: 340px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      border-top: 5px solid #2d3cc7;
+    }
+
+    .card.upgrade { border-top-color: #7c3aed; }
+
+    .card h2   { font-size: 1.2rem; margin-bottom: 6px; }
+    .card .price {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #2d3cc7;
+      margin: 10px 0;
+    }
+    .card.upgrade .price { color: #7c3aed; }
+
+    .card p {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      margin-bottom: 4px;
+      color: #444;
+      font-weight: 600;
+    }
+
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1.5px solid #ddd;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      margin-bottom: 14px;
+      outline: none;
+      transition: border 0.2s;
+    }
+
+    input:focus { border-color: #2d3cc7; }
+
+    button {
+      width: 100%;
+      padding: 13px;
+      border: none;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+
+    button:active   { transform: scale(0.98); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    .btn-subscribe { background: #2d3cc7; color: white; }
+    .btn-upgrade   { background: #7c3aed; color: white; }
+
+    .section {
+      background: white;
+      border-radius: 16px;
+      padding: 24px 28px;
+      width: 100%;
+      max-width: 800px;
+      margin-top: 28px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    }
+
+    .section h3 {
+      font-size: 1rem;
+      color: #444;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #ccc; display: inline-block; }
+    .dot.green  { background: #22c55e; }
+    .dot.red    { background: #ef4444; }
+    .dot.yellow { background: #f59e0b; }
+
+    pre {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      padding: 16px;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.6;
+      min-height: 60px;
+    }
+
+    .ref-box {
+      background: #eef2ff;
+      border: 1.5px dashed #2d3cc7;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-family: monospace;
+      font-size: 1rem;
+      color: #2d3cc7;
+      margin-bottom: 14px;
+      word-break: break-all;
+    }
+
+    .info-box {
+      background: #fffbeb;
+      border: 1.5px solid #fcd34d;
+      border-radius: 10px;
+      padding: 14px 16px;
+      font-size: 0.88rem;
+      color: #78350f;
+      margin-bottom: 14px;
+      line-height: 1.6;
+    }
+
+    .btn-status { background: #0369a1; color: white; margin-top: 10px; }
+
+    .log-entry {
+      border-left: 3px solid #2d3cc7;
+      padding: 6px 12px;
+      margin-bottom: 8px;
+      font-size: 0.85rem;
+      color: #333;
+      background: #f8faff;
+      border-radius: 0 6px 6px 0;
+    }
+
+    .log-entry .time { color: #999; font-size: 0.78rem; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Olearna</h1>
+    <p>Payment Integration – Hubtel UAT Demo</p>
+    <span class="badge">Test Environment – Real Hubtel API</span>
+  </header>
+
+  <!-- Payment Cards -->
+  <div class="cards">
+
+    <!-- Subscribe Card -->
+    <div class="card">
+      <h2>Basic Subscription</h2>
+      <div class="price">GHS 5</div>
+      <p>Access to all core learning materials for one month.</p>
+
+      <label>User ID</label>
+      <input type="text" id="sub-user-id" value="student_001" />
+
+      <label>Phone Number (MoMo)</label>
+      <input type="tel" id="sub-phone" placeholder="e.g. 0241234567" />
+
+      <button class="btn-subscribe" onclick="pay('subscribe')">
+        Subscribe — GHS 5
+      </button>
+    </div>
+
+    <!-- Upgrade Card -->
+    <div class="card upgrade">
+      <h2>Upgrade to Premium</h2>
+      <div class="price">GHS 10</div>
+      <p>Unlock live sessions, mentors, and advanced content.</p>
+
+      <label>User ID</label>
+      <input type="text" id="upg-user-id" value="student_001" />
+
+      <label>Phone Number (MoMo)</label>
+      <input type="tel" id="upg-phone" placeholder="e.g. 0241234567" />
+
+      <button class="btn-upgrade" onclick="pay('upgrade')">
+        Upgrade — GHS 10
+      </button>
+    </div>
+
+  </div>
+
+  <!-- After payment initiated -->
+  <div class="section" id="after-pay" style="display:none;">
+    <h3><span class="dot yellow"></span> Payment Sent to Hubtel</h3>
+
+    <div class="ref-box" id="ref-box"></div>
+
+    <div class="info-box">
+      The customer will receive a <strong>mobile money prompt on their phone</strong>.
+      Once they approve (or decline) the payment, Hubtel will automatically call our
+      <strong>/callback</strong> endpoint. You can then click below to confirm the result.
+    </div>
+
+    <button class="btn-status" onclick="checkStatus()">
+      Check Payment Status
+    </button>
+  </div>
+
+  <!-- Response Output -->
+  <div class="section">
+    <h3><span class="dot" id="status-dot"></span> API Response</h3>
+    <pre id="response-box">Responses will appear here after you click a button above.</pre>
+  </div>
+
+  <!-- Activity Log -->
+  <div class="section">
+    <h3>Activity Log</h3>
+    <div id="log-container">
+      <p style="color:#999;font-size:0.85rem;">No activity yet.</p>
+    </div>
+  </div>
+
+  <script>
+    // When running locally use localhost. When hosted on Render this page is
+    // served from the same server so an empty string means "same origin".
+    const BASE = "";
+
+    let currentReference = null;
+    let currentAmount    = null;
+
+    function showResponse(data, isError) {
+      document.getElementById("response-box").textContent = JSON.stringify(data, null, 2);
+      document.getElementById("status-dot").className = "dot " + (isError ? "red" : "green");
+    }
+
+    function addLog(message) {
+      const container = document.getElementById("log-container");
+      if (container.querySelector("p")) container.innerHTML = "";
+      const now   = new Date().toLocaleTimeString();
+      const entry = document.createElement("div");
+      entry.className = "log-entry";
+      entry.innerHTML = `<span class="time">${now}</span> &nbsp; ${message}`;
+      container.prepend(entry);
+    }
+
+    async function pay(type) {
+      const isUpgrade = type === "upgrade";
+      const userId    = document.getElementById(isUpgrade ? "upg-user-id" : "sub-user-id").value.trim();
+      const phone     = document.getElementById(isUpgrade ? "upg-phone"   : "sub-phone").value.trim();
+      currentAmount   = isUpgrade ? 10 : 5;
+      const plan      = isUpgrade ? "premium" : "basic";
+
+      if (!userId || !phone) {
+        alert("Please fill in both User ID and Phone Number.");
+        return;
+      }
+
+      addLog(`Initiating <strong>${plan}</strong> payment for <strong>${userId}</strong> (GHS ${currentAmount}, phone: ${phone})…`);
+
+      try {
+        const res  = await fetch(`${BASE}/pay`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId, amount: currentAmount, plan, phone }),
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          currentReference = data.reference;
+          document.getElementById("after-pay").style.display = "block";
+          document.getElementById("ref-box").textContent = currentReference;
+          addLog(`Hubtel accepted the request. Reference: <strong>${currentReference}</strong>`);
+          showResponse(data, false);
+        } else {
+          showResponse(data, true);
+          addLog("Payment initiation FAILED — see API Response for details.");
+        }
+      } catch (err) {
+        showResponse({ error: "Cannot reach server. Is it running?" }, true);
+        addLog("Server connection error.");
+      }
+    }
+
+    async function checkStatus() {
+      if (!currentReference) {
+        alert("No active payment reference.");
+        return;
+      }
+      addLog(`Checking status for <strong>${currentReference}</strong>…`);
+      try {
+        const res  = await fetch(`${BASE}/status/${currentReference}`);
+        const data = await res.json();
+        const isOk = data.status === "SUCCESS";
+        showResponse(data, !isOk);
+        addLog(`Status: <strong>${data.status}</strong> | Subscription active: <strong>${data.subscription_active}</strong>`);
+      } catch (err) {
+        showResponse({ error: "Cannot reach server." }, true);
+      }
+    }
+  </script>
+
+</body>
+</html>
