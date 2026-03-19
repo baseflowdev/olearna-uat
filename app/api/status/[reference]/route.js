@@ -9,7 +9,7 @@ import { NextResponse } from "next/server";
 import { readTransactions } from "@/lib/storage";
 
 export async function GET(request, { params }) {
-  const { reference } = params;
+  const { reference } = await params;
 
   const transactions  = await readTransactions();
   const transaction   = transactions.find((t) => t.reference === reference);
