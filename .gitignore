@@ -1,0 +1,15 @@
+# ── Secret keys — NEVER upload these ──
+.env
+.env.local
+.env*.local
+
+# ── Next.js build output ──
+.next/
+out/
+
+# ── Node modules (very large, not needed on GitHub) ──
+node_modules/
+
+# ── OS junk files ──
+.DS_Store
+Thumbs.db
