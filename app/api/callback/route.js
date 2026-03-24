@@ -1,8 +1,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /api/callback
 //
-//  Hubtel calls this endpoint automatically after the customer completes
-//  or fails a payment. You do NOT call this yourself.
+//  Hubtel calls this endpoint automatically after the customer approves
+//  or rejects the payment. You do NOT call this yourself.
+//
+//  Hubtel Direct Receive Money callback format:
+//  {
+//    "ResponseCode": "0000",        // "0000" = success, anything else = failed
+//    "Message": "success",
+//    "Data": {
+//      "Amount": 0.8,
+//      "ClientReference": "OLN...",
+//      "TransactionId": "...",
+//      "ExternalTransactionId": "...",
+//      ...
+//    }
+//  }
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextResponse } from "next/server";
@@ -12,24 +25,19 @@ export async function POST(request) {
   const body = await request.json();
   console.log("[CALLBACK] Received from Hubtel:", JSON.stringify(body, null, 2));
 
-  // ── Hubtel Online Checkout callback format ───────────────────────────────
-  const data            = body?.Data || body;
-  const responseCode    = body?.ResponseCode || body?.responseCode;
-  const status          = body?.Status || body?.status || data?.Status || data?.status;
-  const clientReference = data?.ClientReference || data?.clientReference || body?.ClientReference || body?.clientReference;
-  const transactionId   = data?.CheckoutId || data?.SalesInvoiceId || data?.TransactionId || body?.TransactionId;
-  const amount          = data?.Amount || body?.Amount;
+  // ── Parse the callback payload ───────────────────────────────────────────
+  const responseCode    = body?.ResponseCode;
+  const data            = body?.Data || {};
+  const clientReference = data?.ClientReference || body?.ClientReference;
+  const transactionId   = data?.TransactionId;
 
   if (!clientReference) {
     console.error("[CALLBACK] Missing ClientReference");
     return NextResponse.json({ error: "Missing ClientReference" }, { status: 400 });
   }
 
-  // ── "0000" is Hubtel's success code, "Success" is the status string ─────
-  const isSuccess =
-    responseCode === "0000" ||
-    String(status).toLowerCase() === "success";
-
+  // ── "0000" is Hubtel's success code ─────────────────────────────────────
+  const isSuccess = responseCode === "0000";
   const finalStatus = isSuccess ? "SUCCESS" : "FAILED";
 
   // ── Find and update the transaction ───────────────────────────────────────
@@ -54,6 +62,7 @@ export async function POST(request) {
 
   console.log(`[CALLBACK] Updated: ${clientReference} → ${finalStatus}`);
 
+  // ── Always return 200 so Hubtel knows we received it ───────────────────
   return NextResponse.json({
     message:             "Callback received",
     reference:           clientReference,

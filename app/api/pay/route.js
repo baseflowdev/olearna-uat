@@ -2,45 +2,43 @@
 //  POST /api/pay
 //
 //  Called when a user clicks Subscribe or Upgrade on the frontend.
-//  Supports two modes:
-//    1. "direct"   — Sends MoMo prompt directly to customer's phone (own UI)
-//    2. "checkout"  — Returns Hubtel checkout URL for redirect
+//  Uses Hubtel Direct Receive Money API (rmp.hubtel.com) to send a
+//  mobile money prompt directly to the customer's phone.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextResponse } from "next/server";
 import axios from "axios";
-import { readTransactions, saveTransactions } from "@/lib/storage";
+import { readTransactions, saveTransactions, getUser } from "@/lib/storage";
 
 export async function POST(request) {
   const body = await request.json();
-  const { user_id, amount, plan, phone, channel, mode = "direct" } = body;
+  const { user_id, amount, plan, phone, channel } = body;
 
   // ── Validate inputs ────────────────────────────────────────────────────────
-  if (!user_id || !amount || !plan) {
+  if (!amount || !plan || !phone || !channel) {
     return NextResponse.json(
-      { error: "Missing required fields: user_id, amount, plan" },
+      { error: "Missing required fields: amount, plan, phone, channel" },
       { status: 400 }
     );
   }
 
-  if (mode === "direct" && (!phone || !channel)) {
-    return NextResponse.json(
-      { error: "Missing required fields for direct payment: phone, channel" },
-      { status: 400 }
-    );
+  // ── Normalize phone to international format (233XXXXXXXXX) ─────────────
+  let msisdn = phone.replace(/[\s\-\+]/g, "");
+  if (msisdn.startsWith("0") && msisdn.length === 10) {
+    msisdn = "233" + msisdn.slice(1);
   }
 
-  // ── Generate a unique reference for this payment ───────────────────────────
-  const reference = "OLN-" + Date.now();
+  // ── Generate a unique alphanumeric reference (max 36 chars) ──────────────
+  const reference = "OLN" + Date.now();
 
   // ── Save the transaction as PENDING right away ─────────────────────────────
   const newTransaction = {
     reference,
-    user_id,
+    user_id: user_id || msisdn,
     amount,
     plan,
-    phone: phone || null,
-    channel: channel || null,
+    phone: msisdn,
+    channel,
     status: "PENDING",
     transaction_id: null,
     timestamp: new Date().toISOString(),
@@ -50,78 +48,43 @@ export async function POST(request) {
   transactions.push(newTransaction);
   await saveTransactions(transactions);
 
-  // ── Build Basic Auth token ─────────────────────────────────────────────────
+  console.log(`[PAY] Initiated — Ref: ${reference}, Phone: ${msisdn}, Amount: GHS ${amount}`);
+
+  // ── Call Hubtel Direct Receive Money API ────────────────────────────────
   const credentials = `${process.env.HUBTEL_CLIENT_ID}:${process.env.HUBTEL_CLIENT_SECRET}`;
   const authToken   = Buffer.from(credentials).toString("base64");
-  const headers     = {
-    Authorization:  `Basic ${authToken}`,
-    "Content-Type": "application/json",
-    "Cache-Control": "no-cache",
-  };
 
   try {
-    let hubtelRes;
-
-    if (mode === "checkout") {
-      // ── Online Checkout (redirect to Hubtel page) ────────────────────────
-      const origin = request.headers.get("origin")
-        || request.headers.get("referer")?.replace(/\/$/, "")
-        || process.env.NEXT_PUBLIC_BASE_URL;
-
-      hubtelRes = await axios.post(
-        "https://payproxyapi.hubtel.com/items/initiate",
-        {
-          totalAmount:           parseFloat(amount),
-          description:           `Olearna ${plan} plan`,
-          callbackUrl:           process.env.CALLBACK_URL,
-          returnUrl:             `${origin}/payment-result?reference=${reference}`,
-          cancellationUrl:       `${origin}/payment-result?reference=${reference}&cancelled=true`,
-          merchantAccountNumber: process.env.HUBTEL_MERCHANT_ACCOUNT,
-          clientReference:       reference,
+    const hubtelRes = await axios.post(
+      `https://rmp.hubtel.com/merchantaccount/merchants/${process.env.HUBTEL_MERCHANT_ACCOUNT}/receive/mobilemoney`,
+      {
+        CustomerMsisdn:     msisdn,
+        Channel:            channel,
+        Amount:             parseFloat(amount),
+        PrimaryCallbackUrl: process.env.CALLBACK_URL,
+        Description:        `Olearna ${plan} plan`,
+        ClientReference:    reference,
+      },
+      {
+        headers: {
+          Authorization:  `Basic ${authToken}`,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
         },
-        { headers }
-      );
+      }
+    );
 
-      const checkoutUrl = hubtelRes.data?.data?.checkoutUrl;
+    console.log(`[PAY] Hubtel accepted — Ref: ${reference}`, hubtelRes.data);
 
-      console.log(`[PAY] Checkout initiated — Ref: ${reference}`, hubtelRes.data);
-
-      return NextResponse.json({
-        message:     "Payment initiated. Redirect customer to checkout.",
-        reference,
-        status:      "PENDING",
-        plan,
-        amount,
-        checkoutUrl,
-        checkoutId:  hubtelRes.data?.data?.checkoutId,
-      });
-
-    } else {
-      // ── Direct Mobile Money (prompt sent to customer's phone) ────────────
-      hubtelRes = await axios.post(
-        `https://api.hubtel.com/v1/merchantaccount/merchants/${process.env.HUBTEL_MERCHANT_ACCOUNT}/receive/mobilemoney`,
-        {
-          CustomerMsisdn:     phone,
-          Channel:            channel,
-          Amount:             parseFloat(amount),
-          PrimaryCallbackUrl: process.env.CALLBACK_URL,
-          Description:        `Olearna ${plan} plan`,
-          ClientReference:    reference,
-        },
-        { headers }
-      );
-
-      console.log(`[PAY] Direct MoMo initiated — Ref: ${reference}, Phone: ${phone}`, hubtelRes.data);
-
-      return NextResponse.json({
-        message:   "Payment prompt sent to customer's phone.",
-        reference,
-        status:    "PENDING",
-        plan,
-        amount,
-        phone,
-      });
-    }
+    return NextResponse.json({
+      message:   "Payment prompt sent to customer's phone.",
+      reference,
+      status:    "PENDING",
+      plan,
+      amount,
+      phone:     msisdn,
+      hubtel:    hubtelRes.data,
+    });
 
   } catch (error) {
     const status = error.response?.status;
@@ -129,15 +92,18 @@ export async function POST(request) {
     console.error("[PAY] Hubtel API error:", status, errDetails);
 
     let userError, tip;
-    if (status === 401 || status === 403) {
-      userError = "Hubtel authentication failed. Check your API keys.";
-      tip = "Make sure HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET, and HUBTEL_MERCHANT_ACCOUNT are set correctly.";
+    if (status === 401) {
+      userError = "Hubtel authentication failed.";
+      tip = "Check HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET, and HUBTEL_MERCHANT_ACCOUNT (POS Sales ID).";
+    } else if (status === 403) {
+      userError = "Access denied by Hubtel.";
+      tip = "Your server IP may not be whitelisted. Contact your Hubtel Retail Systems Engineer to whitelist Vercel's IP addresses.";
     } else if (status >= 500 || !status) {
       userError = "Hubtel's server is currently unavailable. Please try again later.";
-      tip = "This is a Hubtel-side outage (not an API key issue). Retry in a few minutes.";
+      tip = "This is a Hubtel-side issue. Retry in a few minutes.";
     } else {
-      userError = "Hubtel API call failed.";
-      tip = "Check the details field for more information.";
+      userError = `Hubtel error (${errDetails?.ResponseCode || status}).`;
+      tip = errDetails?.Message || "Check the details field for more information.";
     }
 
     return NextResponse.json(
