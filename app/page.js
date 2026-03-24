@@ -69,17 +69,6 @@ const s = {
     outline: "none",
     boxSizing: "border-box",
   },
-  select: {
-    width: "100%",
-    padding: "10px 12px",
-    border: "1.5px solid #ddd",
-    borderRadius: "8px",
-    fontSize: "0.95rem",
-    marginBottom: "14px",
-    outline: "none",
-    background: "white",
-    boxSizing: "border-box",
-  },
   btn: (bg, disabled) => ({
     width: "100%",
     padding: "13px",
@@ -122,16 +111,6 @@ const s = {
     marginBottom: "14px",
     wordBreak: "break-all",
   },
-  infoBox: {
-    background: "#fffbeb",
-    border: "1.5px solid #fcd34d",
-    borderRadius: "10px",
-    padding: "14px 16px",
-    fontSize: "0.88rem",
-    color: "#78350f",
-    marginBottom: "14px",
-    lineHeight: 1.6,
-  },
   pre: {
     background: "#1e1e2e",
     color: "#cdd6f4",
@@ -163,7 +142,7 @@ const s = {
   }),
 };
 
-// ── Reusable form field components ────────────────────────────────────────────
+// ── Reusable form field component ─────────────────────────────────────────────
 
 function Field({ label, id, value, onChange, placeholder, type = "text" }) {
   return (
@@ -181,38 +160,20 @@ function Field({ label, id, value, onChange, placeholder, type = "text" }) {
   );
 }
 
-function NetworkSelect({ id, value, onChange }) {
-  return (
-    <div>
-      <label style={s.label} htmlFor={id}>Mobile Network</label>
-      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} style={s.select}>
-        <option value="">— Select network —</option>
-        <option value="mtn-gh">MTN Mobile Money</option>
-        <option value="vodafone-gh">Vodafone Cash</option>
-        <option value="tigo-gh">AirtelTigo Money</option>
-      </select>
-    </div>
-  );
-}
-
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function Home() {
   // Subscribe form state
-  const [subUserId,  setSubUserId]  = useState("student_001");
-  const [subPhone,   setSubPhone]   = useState("");
-  const [subNetwork, setSubNetwork] = useState("");
+  const [subUserId, setSubUserId] = useState("student_001");
 
   // Upgrade form state
-  const [upgUserId,  setUpgUserId]  = useState("student_001");
-  const [upgPhone,   setUpgPhone]   = useState("");
-  const [upgNetwork, setUpgNetwork] = useState("");
+  const [upgUserId, setUpgUserId] = useState("student_001");
 
   // Shared UI state
   const [loading,    setLoading]    = useState(false);
   const [reference,  setReference]  = useState(null);
   const [response,   setResponse]   = useState("Responses will appear here after you click a button above.");
-  const [responseOk, setResponseOk] = useState(null); // true=green, false=red, null=grey
+  const [responseOk, setResponseOk] = useState(null);
   const [logs,       setLogs]       = useState([]);
 
   function addLog(msg) {
@@ -227,25 +188,23 @@ export default function Home() {
   // ── Step 1: Initiate Payment ───────────────────────────────────────────────
   async function pay(type) {
     const isUpgrade = type === "upgrade";
-    const userId    = isUpgrade ? upgUserId  : subUserId;
-    const phone     = isUpgrade ? upgPhone   : subPhone;
-    const channel   = isUpgrade ? upgNetwork : subNetwork;
+    const userId    = isUpgrade ? upgUserId : subUserId;
     const amount    = isUpgrade ? 10 : 5;
     const plan      = isUpgrade ? "premium" : "basic";
 
-    if (!userId || !phone || !channel) {
-      alert("Please fill in User ID, Phone Number, and select a Mobile Network.");
+    if (!userId) {
+      alert("Please fill in User ID.");
       return;
     }
 
     setLoading(true);
-    addLog(`Initiating ${plan} payment for ${userId} — GHS ${amount} on ${channel}…`);
+    addLog(`Initiating ${plan} payment for ${userId} — GHS ${amount}…`);
 
     try {
       const res  = await fetch("/api/pay", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ user_id: userId, amount, plan, phone, channel }),
+        body:    JSON.stringify({ user_id: userId, amount, plan }),
       });
       const data = await res.json();
 
@@ -253,6 +212,12 @@ export default function Home() {
         setReference(data.reference);
         addLog(`Hubtel accepted. Reference: ${data.reference}`);
         showResponse(data, false);
+
+        // Redirect to Hubtel checkout page
+        if (data.checkoutUrl) {
+          addLog("Redirecting to Hubtel checkout…");
+          window.location.href = data.checkoutUrl;
+        }
       } else {
         showResponse(data, true);
         addLog("Payment initiation FAILED — see API Response for details.");
@@ -290,7 +255,7 @@ export default function Home() {
       <header style={s.header}>
         <h1 style={s.h1}>Olearna</h1>
         <p style={s.subtext}>Payment Integration – Hubtel UAT Demo</p>
-        <span style={s.badge}>Test Environment – Real Hubtel API</span>
+        <span style={s.badge}>Test Environment – Hubtel Online Checkout</span>
       </header>
 
       {/* Payment Cards */}
@@ -302,9 +267,7 @@ export default function Home() {
           <div style={s.price("#2d3cc7")}>GHS 5</div>
           <p style={s.desc}>Access to all core learning materials for one month.</p>
 
-          <Field label="User ID"        id="sub-uid"   value={subUserId}  onChange={setSubUserId}  placeholder="e.g. student_001" />
-          <Field label="Phone (MoMo)"   id="sub-phone" value={subPhone}   onChange={setSubPhone}   placeholder="e.g. 0241234567" type="tel" />
-          <NetworkSelect id="sub-net" value={subNetwork} onChange={setSubNetwork} />
+          <Field label="User ID" id="sub-uid" value={subUserId} onChange={setSubUserId} placeholder="e.g. student_001" />
 
           <button style={s.btn("#2d3cc7", loading)} disabled={loading} onClick={() => pay("subscribe")}>
             {loading ? "Sending…" : "Subscribe — GHS 5"}
@@ -317,9 +280,7 @@ export default function Home() {
           <div style={s.price("#7c3aed")}>GHS 10</div>
           <p style={s.desc}>Unlock live sessions, mentors, and advanced content.</p>
 
-          <Field label="User ID"        id="upg-uid"   value={upgUserId}  onChange={setUpgUserId}  placeholder="e.g. student_001" />
-          <Field label="Phone (MoMo)"   id="upg-phone" value={upgPhone}   onChange={setUpgPhone}   placeholder="e.g. 0241234567" type="tel" />
-          <NetworkSelect id="upg-net" value={upgNetwork} onChange={setUpgNetwork} />
+          <Field label="User ID" id="upg-uid" value={upgUserId} onChange={setUpgUserId} placeholder="e.g. student_001" />
 
           <button style={s.btn("#7c3aed", loading)} disabled={loading} onClick={() => pay("upgrade")}>
             {loading ? "Sending…" : "Upgrade — GHS 10"}
@@ -328,18 +289,13 @@ export default function Home() {
 
       </div>
 
-      {/* After payment is initiated */}
+      {/* After payment is initiated (shown if user returns before redirect) */}
       {reference && (
         <div style={s.section}>
           <h3 style={s.sectionTitle}>
-            <span style={s.dot("#f59e0b")} /> Payment Sent to Hubtel
+            <span style={s.dot("#f59e0b")} /> Payment Initiated
           </h3>
           <div style={s.refBox}>{reference}</div>
-          <div style={s.infoBox}>
-            The customer will receive a <strong>mobile money prompt on their phone</strong>.
-            Once they approve (or decline), Hubtel automatically calls our{" "}
-            <strong>/api/callback</strong> endpoint. Click below to check the result.
-          </div>
           <button style={s.btn("#0369a1", false)} onClick={checkStatus}>
             Check Payment Status
           </button>

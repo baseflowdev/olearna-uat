@@ -3,7 +3,9 @@
     "allow": [
       "Bash(gh --version)",
       "Bash(git --version)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(npm install:*)",
+      "Bash(npx next:*)"
     ],
     "additionalDirectories": [
       "c:\\Users\\FLOW\\Desktop\\Main\\Olearna\\UAT testing\\app\\api\\status"

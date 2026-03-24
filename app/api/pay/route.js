@@ -2,8 +2,8 @@
 //  POST /api/pay
 //
 //  Called when a user clicks Subscribe or Upgrade on the frontend.
-//  This sends a payment request to Hubtel, which then sends a prompt
-//  to the customer's mobile money phone.
+//  Uses Hubtel Online Checkout API — returns a checkout URL that the
+//  customer is redirected to for payment.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextResponse } from "next/server";
@@ -12,12 +12,12 @@ import { readTransactions, saveTransactions } from "@/lib/storage";
 
 export async function POST(request) {
   const body = await request.json();
-  const { user_id, amount, plan, phone, channel } = body;
+  const { user_id, amount, plan } = body;
 
   // ── Validate inputs ────────────────────────────────────────────────────────
-  if (!user_id || !amount || !plan || !phone || !channel) {
+  if (!user_id || !amount || !plan) {
     return NextResponse.json(
-      { error: "Missing required fields: user_id, amount, plan, phone, channel" },
+      { error: "Missing required fields: user_id, amount, plan" },
       { status: 400 }
     );
   }
@@ -31,8 +31,6 @@ export async function POST(request) {
     user_id,
     amount,
     plan,
-    phone,
-    channel,
     status: "PENDING",
     transaction_id: null,
     timestamp: new Date().toISOString(),
@@ -42,23 +40,26 @@ export async function POST(request) {
   transactions.push(newTransaction);
   await saveTransactions(transactions);
 
-  console.log(`[PAY] Initiated — Ref: ${reference}, Phone: ${phone}, Amount: GHS ${amount}`);
+  console.log(`[PAY] Initiated — Ref: ${reference}, Amount: GHS ${amount}`);
 
-  // ── Call Hubtel API to send prompt to customer's phone ─────────────────────
-  // Build the Basic Auth token from your Client ID and Secret
+  // ── Call Hubtel Online Checkout API ──────────────────────────────────────
   const credentials = `${process.env.HUBTEL_CLIENT_ID}:${process.env.HUBTEL_CLIENT_SECRET}`;
   const authToken   = Buffer.from(credentials).toString("base64");
 
+  // Derive base URL from the request, or use env var
+  const origin = request.headers.get("origin") || request.headers.get("referer")?.replace(/\/$/, "") || process.env.NEXT_PUBLIC_BASE_URL;
+
   try {
     const hubtelRes = await axios.post(
-      `https://api.hubtel.com/v1/merchantaccount/merchants/${process.env.HUBTEL_MERCHANT_ACCOUNT}/receive/mobilemoney`,
+      "https://payproxyapi.hubtel.com/items/initiate",
       {
-        CustomerMsisdn:      phone,
-        Channel:             channel,           // e.g. "mtn-gh"
-        Amount:              amount,
-        PrimaryCallbackUrl:  process.env.CALLBACK_URL,
-        Description:         `Olearna ${plan} plan`,
-        ClientReference:     reference,
+        totalAmount:           parseFloat(amount),
+        description:           `Olearna ${plan} plan`,
+        callbackUrl:           process.env.CALLBACK_URL,
+        returnUrl:             `${origin}/payment-result?reference=${reference}`,
+        cancellationUrl:       `${origin}/payment-result?reference=${reference}&cancelled=true`,
+        merchantAccountNumber: process.env.HUBTEL_MERCHANT_ACCOUNT,
+        clientReference:       reference,
       },
       {
         headers: {
@@ -71,26 +72,37 @@ export async function POST(request) {
 
     console.log(`[PAY] Hubtel accepted — Ref: ${reference}`, hubtelRes.data);
 
+    const checkoutUrl = hubtelRes.data?.data?.checkoutUrl || hubtelRes.data?.data?.checkoutDirectUrl;
+
     return NextResponse.json({
-      message:   "Payment request sent. Customer will receive a prompt on their phone.",
+      message:     "Payment initiated. Redirect customer to checkout.",
       reference,
-      status:    "PENDING",
+      status:      "PENDING",
       plan,
       amount,
-      phone,
+      checkoutUrl,
+      checkoutId:  hubtelRes.data?.data?.checkoutId,
     });
 
   } catch (error) {
+    const status = error.response?.status;
     const errDetails = error.response?.data || error.message;
-    console.error("[PAY] Hubtel API error:", errDetails);
+    console.error("[PAY] Hubtel API error:", status, errDetails);
+
+    let userError, tip;
+    if (status === 401 || status === 403) {
+      userError = "Hubtel authentication failed. Check your API keys.";
+      tip = "Make sure HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET, and HUBTEL_MERCHANT_ACCOUNT are set correctly.";
+    } else if (status >= 500 || !status) {
+      userError = "Hubtel's server is currently unavailable. Please try again later.";
+      tip = "This is a Hubtel-side outage (not an API key issue). Retry in a few minutes.";
+    } else {
+      userError = "Hubtel API call failed.";
+      tip = "Check the details field for more information.";
+    }
 
     return NextResponse.json(
-      {
-        error:     "Hubtel API call failed. Check your API keys.",
-        details:   errDetails,
-        reference,
-        tip:       "Make sure HUBTEL_CLIENT_ID, HUBTEL_CLIENT_SECRET, and HUBTEL_MERCHANT_ACCOUNT are set correctly.",
-      },
+      { error: userError, details: errDetails, reference, tip },
       { status: 502 }
     );
   }
