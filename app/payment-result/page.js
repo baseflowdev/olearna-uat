@@ -14,7 +14,8 @@ function PaymentResultContent() {
   useEffect(() => {
     if (!reference) { setLoading(false); return; }
 
-    fetch(`/api/status/${reference}`)
+    const proxyUrl = process.env.NEXT_PUBLIC_PAYMENT_PROXY_URL || "";
+    fetch(`${proxyUrl}/status/${reference}`)
       .then((res) => res.json())
       .then((data) => setStatus(data))
       .catch(() => setStatus({ error: "Could not fetch status" }))

@@ -265,8 +265,10 @@ export default function Home() {
     setLoading(true);
     addLog(`Initiating ${plan} payment for ${userId} — GHS ${amount} on ${channel}…`);
 
+    const proxyUrl = process.env.NEXT_PUBLIC_PAYMENT_PROXY_URL || "";
+
     try {
-      const res  = await fetch("/api/pay", {
+      const res  = await fetch(`${proxyUrl}/pay`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ user_id: userId, amount, plan, phone, channel }),
@@ -295,7 +297,8 @@ export default function Home() {
     addLog(`Checking status for ${reference}…`);
 
     try {
-      const res  = await fetch(`/api/status/${reference}`);
+      const proxyUrl = process.env.NEXT_PUBLIC_PAYMENT_PROXY_URL || "";
+      const res  = await fetch(`${proxyUrl}/status/${reference}`);
       const data = await res.json();
       showResponse(data, data.status !== "SUCCESS");
       addLog(`Status: ${data.status} | Subscription active: ${data.subscription_active}`);
