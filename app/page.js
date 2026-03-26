@@ -34,7 +34,7 @@ const s = {
     flexWrap: "wrap",
     justifyContent: "center",
     width: "100%",
-    maxWidth: "800px",
+    maxWidth: "1100px",
   },
   card: (accent) => ({
     background: "white",
@@ -201,6 +201,10 @@ export default function Home() {
   // User state (from signup)
   const [user, setUser] = useState(null);
 
+  // Trial form state
+  const [trialPhone,   setTrialPhone]   = useState("");
+  const [trialNetwork, setTrialNetwork] = useState("");
+
   // Subscribe form state
   const [subPhone,   setSubPhone]   = useState("");
   const [subNetwork, setSubNetwork] = useState("");
@@ -226,6 +230,7 @@ export default function Home() {
         // Pre-fill phone from verified number
         if (parsed.phone) {
           const local = parsed.phone.startsWith("233") ? "0" + parsed.phone.slice(3) : parsed.phone;
+          setTrialPhone(local);
           setSubPhone(local);
           setUpgPhone(local);
         }
@@ -250,12 +255,15 @@ export default function Home() {
 
   // ── Initiate Payment (direct MoMo prompt) ─────────────────────────────────
   async function pay(type) {
-    const isUpgrade = type === "upgrade";
-    const phone     = isUpgrade ? upgPhone   : subPhone;
-    const channel   = isUpgrade ? upgNetwork : subNetwork;
-    const amount    = isUpgrade ? 10 : 5;
-    const plan      = isUpgrade ? "premium" : "basic";
-    const userId    = user?.phone || phone;
+    let phone, channel, amount, plan;
+    if (type === "trial") {
+      phone = trialPhone; channel = trialNetwork; amount = 1; plan = "trial";
+    } else if (type === "upgrade") {
+      phone = upgPhone; channel = upgNetwork; amount = 10; plan = "premium";
+    } else {
+      phone = subPhone; channel = subNetwork; amount = 5; plan = "basic";
+    }
+    const userId = user?.phone || phone;
 
     if (!phone || !channel) {
       alert("Please fill in Phone Number and select a Mobile Network.");
@@ -343,6 +351,20 @@ export default function Home() {
 
       {/* Payment Cards */}
       <div style={s.cards}>
+
+        {/* Trial */}
+        <div style={s.card("#10b981")}>
+          <h2 style={s.cardTitle}>Trial</h2>
+          <div style={s.price("#10b981")}>GHS 1</div>
+          <p style={s.desc}>Try Olearna for 7 days. Full access to core materials.</p>
+
+          <Field label="Phone (MoMo)" id="trial-phone" value={trialPhone} onChange={setTrialPhone} placeholder="e.g. 0241234567" type="tel" />
+          <NetworkSelect id="trial-net" value={trialNetwork} onChange={setTrialNetwork} />
+
+          <button style={s.btn("#10b981", loading)} disabled={loading} onClick={() => pay("trial")}>
+            {loading ? "Sending…" : "Try — GHS 1"}
+          </button>
+        </div>
 
         {/* Subscribe */}
         <div style={s.card("#2d3cc7")}>
