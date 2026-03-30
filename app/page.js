@@ -219,6 +219,9 @@ export default function Home() {
   const [response,   setResponse]   = useState("Responses will appear here after you click a button above.");
   const [responseOk, setResponseOk] = useState(null);
   const [logs,       setLogs]       = useState([]);
+  const [callbackData, setCallbackData] = useState(null);
+  const [requestLog, setRequestLog] = useState(null);
+  const [frontendLog, setFrontendLog] = useState(null);
 
   // Load user from localStorage on mount
   useEffect(() => {
@@ -274,17 +277,35 @@ export default function Home() {
     addLog(`Initiating ${plan} payment for ${userId} — GHS ${amount} on ${channel}…`);
 
     const proxyUrl = process.env.NEXT_PUBLIC_PAYMENT_PROXY_URL || "";
+    const payUrl = `${proxyUrl}/pay`;
+    const payloadBody = { user_id: userId, amount, plan, phone, channel };
+    const sentAt = new Date().toISOString();
 
     try {
-      const res  = await fetch(`${proxyUrl}/pay`, {
+      const res  = await fetch(payUrl, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ user_id: userId, amount, plan, phone, channel }),
+        body:    JSON.stringify(payloadBody),
       });
       const data = await res.json();
+      const receivedAt = new Date().toISOString();
+
+      // Log the frontend → proxy leg
+      setFrontendLog({
+        from: window.location.origin,
+        to: payUrl,
+        method: "POST",
+        payload: payloadBody,
+        sent_at: sentAt,
+        response_status: res.status,
+        response_body: data,
+        received_at: receivedAt,
+      });
 
       if (res.ok) {
         setReference(data.reference);
+        setCallbackData(null);
+        if (data.request_log) setRequestLog(data.request_log);
         addLog(`Payment prompt sent! Reference: ${data.reference}`);
         showResponse(data, false);
       } else {
@@ -293,6 +314,16 @@ export default function Home() {
       }
     } catch {
       showResponse({ error: "Cannot reach server." }, true);
+      setFrontendLog({
+        from: window.location.origin,
+        to: payUrl,
+        method: "POST",
+        payload: payloadBody,
+        sent_at: sentAt,
+        response_status: "NETWORK_ERROR",
+        response_body: null,
+        received_at: new Date().toISOString(),
+      });
       addLog("Server connection error.");
     } finally {
       setLoading(false);
@@ -310,6 +341,15 @@ export default function Home() {
       const data = await res.json();
       showResponse(data, data.status !== "SUCCESS");
       addLog(`Status: ${data.status} | Subscription active: ${data.subscription_active}`);
+      if (data.request_log) setRequestLog(data.request_log);
+      if (data.raw_callback) {
+        setCallbackData({
+          status: data.status,
+          reference: data.reference,
+          callback_received_at: data.callback_received_at,
+          raw_callback: data.raw_callback,
+        });
+      }
     } catch {
       showResponse({ error: "Cannot reach server." }, true);
     }
@@ -421,6 +461,118 @@ export default function Home() {
         </h3>
         <pre style={s.pre}>{response}</pre>
       </div>
+
+      {/* Transaction Logs — Full Round Trip */}
+      {(frontendLog || requestLog || callbackData) && (
+        <div style={s.section}>
+          <h3 style={s.sectionTitle}>
+            <span style={s.dot(callbackData ? (callbackData.status === "SUCCESS" ? "#22c55e" : "#ef4444") : "#f59e0b")} /> Transaction Logs — Full Round Trip
+          </h3>
+
+          {/* Step 1: Frontend (Vercel) → Proxy (DigitalOcean) */}
+          {frontendLog && (
+            <div style={{ marginBottom: "20px" }}>
+              <h4 style={{ fontSize: "0.92rem", color: "#7c3aed", margin: "0 0 8px 0" }}>
+                Step 1: Frontend (Vercel) → Payment Proxy (DigitalOcean)
+              </h4>
+              <div style={{ fontSize: "0.85rem", color: "#555", marginBottom: "8px", lineHeight: 1.7 }}>
+                <div><strong>From:</strong> <code style={{ background: "#f3e8ff", padding: "2px 6px", borderRadius: "4px", fontSize: "0.82rem" }}>{frontendLog.from}</code></div>
+                <div><strong>To:</strong> <code style={{ background: "#f3e8ff", padding: "2px 6px", borderRadius: "4px", fontSize: "0.82rem" }}>{frontendLog.to}</code></div>
+                <div><strong>Method:</strong> {frontendLog.method}</div>
+                <div><strong>Sent at:</strong> {new Date(frontendLog.sent_at).toLocaleString()}</div>
+                <div><strong>Response status:</strong> {frontendLog.response_status}</div>
+                <div><strong>Response received at:</strong> {new Date(frontendLog.received_at).toLocaleString()}</div>
+              </div>
+              <p style={{ fontSize: "0.82rem", color: "#888", margin: "6px 0 4px" }}>Request payload sent to proxy:</p>
+              <pre style={s.pre}>{JSON.stringify(frontendLog.payload, null, 2)}</pre>
+            </div>
+          )}
+
+          {/* Step 2: Proxy (DigitalOcean) → Hubtel API */}
+          {requestLog && (
+            <div style={{ marginBottom: "20px" }}>
+              <h4 style={{ fontSize: "0.92rem", color: "#2d3cc7", margin: "0 0 8px 0" }}>
+                Step 2: Payment Proxy (DigitalOcean) → Hubtel API
+              </h4>
+              <div style={{ fontSize: "0.85rem", color: "#555", marginBottom: "8px", lineHeight: 1.7 }}>
+                <div><strong>Hubtel API URL:</strong> <code style={{ background: "#eef2ff", padding: "2px 6px", borderRadius: "4px", fontSize: "0.82rem" }}>{requestLog.url}</code></div>
+                <div><strong>Callback URL registered:</strong> <code style={{ background: "#eef2ff", padding: "2px 6px", borderRadius: "4px", fontSize: "0.82rem" }}>{requestLog.callback_url}</code></div>
+                <div><strong>Sent at:</strong> {new Date(requestLog.sent_at).toLocaleString()}</div>
+              </div>
+              <p style={{ fontSize: "0.82rem", color: "#888", margin: "6px 0 4px" }}>Payload sent to Hubtel:</p>
+              <pre style={s.pre}>{JSON.stringify(requestLog.payload, null, 2)}</pre>
+            </div>
+          )}
+
+          {/* Step 3: Hubtel API → Proxy (DigitalOcean) initial response */}
+          {requestLog?.hubtel_response && (
+            <div style={{ marginBottom: "20px" }}>
+              <h4 style={{ fontSize: "0.92rem", color: "#0369a1", margin: "0 0 8px 0" }}>
+                Step 3: Hubtel API → Payment Proxy (DigitalOcean) — Initial Response
+              </h4>
+              <pre style={s.pre}>{JSON.stringify(requestLog.hubtel_response, null, 2)}</pre>
+            </div>
+          )}
+
+          {/* Step 4: Proxy (DigitalOcean) → Frontend (Vercel) response */}
+          {frontendLog?.response_body && (
+            <div style={{ marginBottom: "20px" }}>
+              <h4 style={{ fontSize: "0.92rem", color: "#7c3aed", margin: "0 0 8px 0" }}>
+                Step 4: Payment Proxy (DigitalOcean) → Frontend (Vercel) — Response
+              </h4>
+              <p style={{ fontSize: "0.82rem", color: "#888", margin: "6px 0 4px" }}>Full response received by frontend:</p>
+              <pre style={s.pre}>{JSON.stringify(frontendLog.response_body, null, 2)}</pre>
+            </div>
+          )}
+
+          {/* Step 5: Hubtel → Proxy (DigitalOcean) callback */}
+          {callbackData ? (
+            <div style={{ marginBottom: "10px" }}>
+              <h4 style={{ fontSize: "0.92rem", color: callbackData.status === "SUCCESS" ? "#16a34a" : "#dc2626", margin: "0 0 8px 0" }}>
+                Step 5: Hubtel → Payment Proxy (DigitalOcean) — Callback
+              </h4>
+              <div style={{ fontSize: "0.85rem", color: "#555", marginBottom: "8px", lineHeight: 1.7 }}>
+                <div><strong>Reference:</strong> {callbackData.reference}</div>
+                <div><strong>Final status:</strong>{" "}
+                  <span style={{ color: callbackData.status === "SUCCESS" ? "#16a34a" : "#dc2626", fontWeight: 700 }}>
+                    {callbackData.status}
+                  </span>
+                </div>
+                <div><strong>Callback received at:</strong> {callbackData.callback_received_at ? new Date(callbackData.callback_received_at).toLocaleString() : "—"}</div>
+                {requestLog?.callback_url && (
+                  <div><strong>Callback URL hit:</strong> <code style={{ background: "#eef2ff", padding: "2px 6px", borderRadius: "4px", fontSize: "0.82rem" }}>{requestLog.callback_url}</code></div>
+                )}
+              </div>
+              <pre style={s.pre}>{JSON.stringify(callbackData.raw_callback, null, 2)}</pre>
+            </div>
+          ) : (
+            <div style={{ marginBottom: "10px" }}>
+              <h4 style={{ fontSize: "0.92rem", color: "#f59e0b", margin: "0 0 8px 0" }}>Step 5: Hubtel → Payment Proxy (DigitalOcean) — Callback</h4>
+              <p style={{ fontSize: "0.85rem", color: "#999" }}>Waiting for callback… Click &quot;Check Payment Status&quot; after approving/declining on your phone.</p>
+            </div>
+          )}
+
+          {/* Copy All Logs Button */}
+          <button
+            style={{ ...s.btn("#64748b", false), marginTop: "10px" }}
+            onClick={() => {
+              const fullLog = {
+                step1_frontend_to_proxy: frontendLog || null,
+                step2_proxy_to_hubtel: requestLog ? { url: requestLog.url, callback_url: requestLog.callback_url, payload: requestLog.payload, sent_at: requestLog.sent_at } : null,
+                step3_hubtel_initial_response: requestLog?.hubtel_response || null,
+                step4_proxy_to_frontend: frontendLog?.response_body || null,
+                step5_hubtel_callback: callbackData?.raw_callback || null,
+                callback_received_at: callbackData?.callback_received_at || null,
+                final_status: callbackData?.status || "PENDING",
+              };
+              navigator.clipboard.writeText(JSON.stringify(fullLog, null, 2));
+              addLog("Full round-trip transaction logs copied to clipboard.");
+            }}
+          >
+            Copy Full Round-Trip Log
+          </button>
+        </div>
+      )}
 
       {/* Activity Log */}
       <div style={s.section}>
