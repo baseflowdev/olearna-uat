@@ -7,36 +7,78 @@ const { Redis } = require("@upstash/redis");
 const app = express();
 app.use(express.json());
 
-// Allow requests from your Vercel frontend
 app.use(cors({
   origin: process.env.FRONTEND_URL || "https://olearna-uat.vercel.app",
   methods: ["GET", "POST"],
 }));
 
-// ── Redis (same Upstash instance as your Vercel app) ──────────────────────
+// ── Redis ────────────────────────────────────────────────────────────────────
 const redis = new Redis({
   url:   process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-const STORAGE_KEY = "olearna_transactions";
+const TX_KEY = "olearna_transactions";
+const LOG_PREFIX = "olearna_log:";
 
 async function readTransactions() {
-  const data = await redis.get(STORAGE_KEY);
+  const data = await redis.get(TX_KEY);
   if (!data) return [];
   return typeof data === "string" ? JSON.parse(data) : data;
 }
 
 async function saveTransactions(transactions) {
-  await redis.set(STORAGE_KEY, JSON.stringify(transactions));
+  await redis.set(TX_KEY, JSON.stringify(transactions));
 }
 
-// ── Health check ──────────────────────────────────────────────────────────
+// ── Structured Log Helpers ───────────────────────────────────────────────────
+
+function maskAuth(headers) {
+  const masked = { ...headers };
+  if (masked.Authorization) {
+    masked.Authorization = masked.Authorization.slice(0, 10) + "****";
+  }
+  return masked;
+}
+
+function normalizePhone(phone) {
+  let cleaned = phone.replace(/[\s\-\+]/g, "");
+  if (cleaned.startsWith("0") && cleaned.length === 10) {
+    cleaned = "233" + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
+function buildLogEntry(step, reference, data) {
+  return {
+    step,
+    reference,
+    timestamp: new Date().toISOString(),
+    ...data,
+  };
+}
+
+// Save a log step to Redis under its own key (olearna_log:<reference>)
+async function saveLog(reference, step, data) {
+  const key = LOG_PREFIX + reference;
+  const existing = await redis.get(key);
+  const log = existing
+    ? (typeof existing === "string" ? JSON.parse(existing) : existing)
+    : { reference, created_at: new Date().toISOString(), steps: {} };
+
+  log.steps[step] = buildLogEntry(step, reference, data);
+  log.updated_at = new Date().toISOString();
+
+  await redis.set(key, JSON.stringify(log));
+  return log;
+}
+
+// ── Health check ─────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({ status: "ok", service: "Olearna Payment Proxy" });
 });
 
-// ── POST /pay — Proxy to Hubtel Direct Receive Money ─────────────────────
+// ── POST /pay ────────────────────────────────────────────────────────────────
 app.post("/pay", async (req, res) => {
   const { user_id, amount, plan, phone, channel } = req.body;
 
@@ -44,15 +86,19 @@ app.post("/pay", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields: amount, plan, phone, channel" });
   }
 
-  // Normalize phone to 233XXXXXXXXX
-  let msisdn = phone.replace(/[\s\-\+]/g, "");
-  if (msisdn.startsWith("0") && msisdn.length === 10) {
-    msisdn = "233" + msisdn.slice(1);
-  }
-
+  const msisdn = normalizePhone(phone);
   const reference = "OLN" + Date.now();
 
-  // Save as PENDING
+  // ── step1: frontend → proxy ──────────────────────────────────────────────
+  await saveLog(reference, "step1_frontend_to_proxy", {
+    source: "frontend",
+    destination: "payment-proxy",
+    method: "POST",
+    path: "/pay",
+    body: { user_id, amount, plan, phone: msisdn, channel },
+  });
+
+  // Save transaction as PENDING
   const transactions = await readTransactions();
   transactions.push({
     reference,
@@ -67,12 +113,9 @@ app.post("/pay", async (req, res) => {
   });
   await saveTransactions(transactions);
 
-  console.log(`[PAY] Initiated — Ref: ${reference}, Phone: ${msisdn}, Amount: GHS ${amount}`);
-
-  // Call Hubtel
+  // Build Hubtel request
   const credentials = `${process.env.HUBTEL_CLIENT_ID}:${process.env.HUBTEL_CLIENT_SECRET}`;
   const authToken = Buffer.from(credentials).toString("base64");
-
   const hubtelUrl = `https://rmp.hubtel.com/merchantaccount/merchants/${process.env.HUBTEL_MERCHANT_ACCOUNT}/receive/mobilemoney`;
   const callbackUrl = `${process.env.PROXY_URL}/callback`;
   const hubtelPayload = {
@@ -83,37 +126,46 @@ app.post("/pay", async (req, res) => {
     Description: `Payment for Olearna ${plan} subscription`,
     ClientReference: reference,
   };
+  const hubtelHeaders = {
+    Authorization: `Basic ${authToken}`,
+    "Content-Type": "application/json",
+    "Cache-Control": "no-cache",
+  };
+
+  // ── step2: proxy → hubtel (BEFORE sending) ──────────────────────────────
+  await saveLog(reference, "step2_proxy_to_hubtel", {
+    source: "payment-proxy",
+    destination: "rmp.hubtel.com",
+    method: "POST",
+    url: hubtelUrl,
+    headers: maskAuth(hubtelHeaders),
+    body: hubtelPayload,
+    callback_url: callbackUrl,
+  });
 
   try {
-    const hubtelRes = await axios.post(
-      hubtelUrl,
-      hubtelPayload,
-      {
-        headers: {
-          Authorization: `Basic ${authToken}`,
-          "Content-Type": "application/json",
-          "Cache-Control": "no-cache",
-        },
-      }
-    );
+    const hubtelRes = await axios.post(hubtelUrl, hubtelPayload, { headers: hubtelHeaders });
 
-    console.log(`[PAY] Hubtel accepted — Ref: ${reference}`, hubtelRes.data);
+    // ── step3: hubtel initial response ────────────────────────────────────
+    await saveLog(reference, "step3_hubtel_initial_response", {
+      source: "rmp.hubtel.com",
+      destination: "payment-proxy",
+      http_status: hubtelRes.status,
+      response_code: hubtelRes.data?.ResponseCode,
+      message: hubtelRes.data?.Message,
+      data: hubtelRes.data?.Data || hubtelRes.data,
+    });
 
-    // Store outgoing request details for frontend logs
+    // Update transaction with request log
     const txs = await readTransactions();
     const idx = txs.findIndex((t) => t.reference === reference);
     if (idx !== -1) {
-      txs[idx].request_log = {
-        url: hubtelUrl,
-        callback_url: callbackUrl,
-        payload: hubtelPayload,
-        hubtel_response: hubtelRes.data,
-        sent_at: new Date().toISOString(),
-      };
+      txs[idx].transaction_id = hubtelRes.data?.Data?.TransactionId || null;
+      txs[idx].hubtel_response = hubtelRes.data;
       await saveTransactions(txs);
     }
 
-    return res.json({
+    const responsePayload = {
       message: "Payment prompt sent to customer's phone.",
       reference,
       status: "PENDING",
@@ -121,19 +173,32 @@ app.post("/pay", async (req, res) => {
       amount,
       phone: msisdn,
       hubtel: hubtelRes.data,
-      request_log: {
-        url: hubtelUrl,
-        callback_url: callbackUrl,
-        payload: hubtelPayload,
-        hubtel_response: hubtelRes.data,
-        sent_at: new Date().toISOString(),
-      },
+    };
+
+    // ── step4: proxy → frontend (response) ────────────────────────────────
+    await saveLog(reference, "step4_proxy_to_frontend", {
+      source: "payment-proxy",
+      destination: "frontend",
+      http_status: 200,
+      body: responsePayload,
     });
+
+    return res.json(responsePayload);
 
   } catch (error) {
     const status = error.response?.status;
     const errDetails = error.response?.data || error.message;
-    console.error("[PAY] Hubtel error:", status, errDetails);
+
+    // Log the failed hubtel response as step3
+    await saveLog(reference, "step3_hubtel_initial_response", {
+      source: "rmp.hubtel.com",
+      destination: "payment-proxy",
+      http_status: status || "NETWORK_ERROR",
+      error: true,
+      response_code: errDetails?.ResponseCode || null,
+      message: errDetails?.Message || error.message,
+      data: errDetails,
+    });
 
     let userError, tip;
     if (status === 401) {
@@ -150,15 +215,23 @@ app.post("/pay", async (req, res) => {
       tip = errDetails?.Message || "Check details.";
     }
 
-    return res.status(502).json({ error: userError, details: errDetails, reference, tip });
+    const errorPayload = { error: userError, details: errDetails, reference, tip };
+
+    await saveLog(reference, "step4_proxy_to_frontend", {
+      source: "payment-proxy",
+      destination: "frontend",
+      http_status: 502,
+      error: true,
+      body: errorPayload,
+    });
+
+    return res.status(502).json(errorPayload);
   }
 });
 
-// ── POST /callback — Receives Hubtel payment result ──────────────────────
+// ── POST /callback ───────────────────────────────────────────────────────────
 app.post("/callback", async (req, res) => {
   const body = req.body;
-  console.log("[CALLBACK] Received:", JSON.stringify(body, null, 2));
-
   const responseCode = body?.ResponseCode;
   const data = body?.Data || {};
   const clientReference = data?.ClientReference || body?.ClientReference;
@@ -171,6 +244,19 @@ app.post("/callback", async (req, res) => {
   const isSuccess = responseCode === "0000";
   const finalStatus = isSuccess ? "SUCCESS" : "FAILED";
 
+  // ── step5: hubtel callback ──────────────────────────────────────────────
+  await saveLog(clientReference, "step5_hubtel_callback", {
+    source: "rmp.hubtel.com",
+    destination: "payment-proxy",
+    method: "POST",
+    path: "/callback",
+    response_code: responseCode,
+    message: body?.Message,
+    data: data,
+    raw: body,
+  });
+
+  // Update transaction
   const transactions = await readTransactions();
   const index = transactions.findIndex((t) => t.reference === clientReference);
 
@@ -185,12 +271,24 @@ app.post("/callback", async (req, res) => {
   transactions[index].raw_callback = body;
 
   await saveTransactions(transactions);
-  console.log(`[CALLBACK] ${clientReference} → ${finalStatus}`);
+
+  // ── final_status ────────────────────────────────────────────────────────
+  await saveLog(clientReference, "final_status", {
+    status: finalStatus,
+    transaction_id: transactionId || null,
+    subscription_active: isSuccess,
+    amount: data?.Amount,
+    charges: data?.Charges,
+    amount_after_charges: data?.AmountAfterCharges,
+    external_transaction_id: data?.ExternalTransactionId || null,
+    payment_date: data?.PaymentDate || null,
+    description: data?.Description || null,
+  });
 
   res.json({ message: "Callback received", reference: clientReference, status: finalStatus });
 });
 
-// ── GET /status/:reference — Check payment status ────────────────────────
+// ── GET /status/:reference ───────────────────────────────────────────────────
 app.get("/status/:reference", async (req, res) => {
   const { reference } = req.params;
   const transactions = await readTransactions();
@@ -211,11 +309,39 @@ app.get("/status/:reference", async (req, res) => {
     timestamp: tx.timestamp,
     callback_received_at: tx.callback_received_at || null,
     raw_callback: tx.raw_callback || null,
-    request_log: tx.request_log || null,
   });
 });
 
-// ── Start ─────────────────────────────────────────────────────────────────
+// ── GET /logs/:reference — Full structured log for a transaction ─────────────
+app.get("/logs/:reference", async (req, res) => {
+  const { reference } = req.params;
+  const key = LOG_PREFIX + reference;
+  const log = await redis.get(key);
+
+  if (!log) {
+    return res.status(404).json({ error: `No logs for: ${reference}` });
+  }
+
+  const parsed = typeof log === "string" ? JSON.parse(log) : log;
+  res.json(parsed);
+});
+
+// ── GET /logs — List all transaction logs ────────────────────────────────────
+app.get("/logs", async (req, res) => {
+  const transactions = await readTransactions();
+  const summaries = transactions.slice(-50).reverse().map((tx) => ({
+    reference: tx.reference,
+    status: tx.status,
+    amount: tx.amount,
+    plan: tx.plan,
+    phone: tx.phone,
+    timestamp: tx.timestamp,
+    log_url: `/logs/${tx.reference}`,
+  }));
+  res.json(summaries);
+});
+
+// ── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Payment proxy running on port ${PORT}`);
